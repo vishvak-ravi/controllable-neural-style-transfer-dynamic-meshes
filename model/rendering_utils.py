@@ -4,7 +4,7 @@ from pytorch3d.structures import Meshes
 from pytorch3d.renderer import (
     Materials,
     OrthographicCameras,
-    FoVOrthographicCameras,
+    PerspectiveCameras,
     RasterizationSettings,
     BlendParams,
     HardPhongShader,
@@ -164,7 +164,7 @@ def render_in_pose(
     #     specular_color=[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
     # )
     R, T = look_at_view_transform(3.5, 15, 180)
-    cameras = FoVPerspectiveCameras(device=device, R=R, T=T)
+    cameras = PerspectiveCameras(device=device, R=R, T=T)
     camera_pos = cameras.get_camera_center()
     lights = PointLights(
         device=device,
@@ -232,12 +232,14 @@ def update_mesh_verts(mesh: Meshes, vertices: torch.Tensor):
     return Meshes(verts=new_verts, faces=mesh.faces_list(), textures=mesh.textures)
 
 
-def vertex_preprocess_from_mesh_path(input_mesh_path: str, translation: torch.Tensor):
+def vertex_preprocess_from_mesh_path(
+    input_mesh_path: str, translation: torch.Tensor = None
+):
     orig_mesh = load_objs_as_meshes(
         [input_mesh_path], device=device, load_textures=False
     ).to(device)
     verts = orig_mesh.verts_packed()
-    center = verts.median(0)
+    center = verts.median(0).values
     verts = verts - center
     scale = 2.0 / (verts.abs().max())
     verts = verts * scale
