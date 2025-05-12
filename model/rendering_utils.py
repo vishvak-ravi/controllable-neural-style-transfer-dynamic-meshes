@@ -107,7 +107,7 @@ def render_mono_texture_from_meshes(
 
     # render setup
     raster_settings = RasterizationSettings(
-        image_size=800, blur_radius=0.0, faces_per_pixel=25
+        image_size=700, blur_radius=0.0, faces_per_pixel=25
     )
     blend_params = BlendParams(background_color=(0.0, 0.0, 0.0))
     renderer = MeshRenderer(
