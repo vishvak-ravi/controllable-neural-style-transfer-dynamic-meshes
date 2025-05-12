@@ -237,4 +237,5 @@ def vertex_preprocess_from_mesh_path(
         assert translation.shape(-1) == 3
         translation = translation.reshape(1, 3)
         verts = verts + translation
+    verts = verts.to(dtype=torch.bfloat16)
     return orig_mesh, verts
