@@ -13,13 +13,17 @@ from style_utils import (
     nearest_neighbor_replacement,
     get_combinatorial_laplacian,
 )
-from rendering_utils import render_mono_texture_from_meshes, render_in_pose
+from rendering_utils import (
+    render_mono_texture_from_meshes,
+    render_in_pose,
+    vertex_preprocess_from_mesh_path,
+)
 import PIL
 
 N_ITERS = 100
 LAMBDAS = [20, 5, 0.5]
 MASK_RATIOS = [0.2, 0.1, 0]
-LR = [5.0e-3, 2.5e-3, 1.5e-3]
+LR = [2.0e-3, 1.0e-3, 0.5e-3]
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -40,14 +44,8 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
         ref_style_features = style_extractor(ref_style)  # 1 x 2688 x H/4, W/4
 
     # set up batched meshes and normalize
-    orig_mesh = load_objs_as_meshes(
-        [input_mesh_path], device=device, load_textures=False
-    ).to(device)
-    verts = orig_mesh.verts_packed()
-    center = verts.mean(0)
-    verts = verts - center
-    scale = 2.0 / (verts.abs().max())
-    verts = verts * scale
+    # vert_wc_translation = torch.Tensor([0.0, -0.25, 0.0])
+    orig_mesh, verts = vertex_preprocess_from_mesh_path(input_mesh_path)
 
     # set up optimizer
     verts = verts.requires_grad_(True)

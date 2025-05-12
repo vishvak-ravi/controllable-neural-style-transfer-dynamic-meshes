@@ -3,7 +3,8 @@ from pytorch3d.io.obj_io import load_objs_as_meshes
 from pytorch3d.structures import Meshes
 from pytorch3d.renderer import (
     Materials,
-    FoVPerspectiveCameras,
+    OrthographicCameras,
+    FoVOrthographicCameras,
     RasterizationSettings,
     BlendParams,
     HardPhongShader,
@@ -94,7 +95,7 @@ def render_mono_texture_from_meshes(
     # sample camera params + lighting
     R, T = sample_camera_params(poisson_radius, batch_size)
 
-    cameras = FoVPerspectiveCameras(device=device, R=R, T=T)
+    cameras = OrthographicCameras(device=device, R=R, T=T)
     camera_pos = cameras.get_camera_center()
     lights = PointLights(
         device=device,
@@ -106,7 +107,7 @@ def render_mono_texture_from_meshes(
 
     # render setup
     raster_settings = RasterizationSettings(
-        image_size=512, blur_radius=0.0, faces_per_pixel=25
+        image_size=800, blur_radius=0.0, faces_per_pixel=25
     )
     blend_params = BlendParams(background_color=(0.0, 0.0, 0.0))
     renderer = MeshRenderer(
@@ -229,3 +230,19 @@ def update_mesh_verts(mesh: Meshes, vertices: torch.Tensor):
         new_verts = [vertices[i] for i in range(vertices.shape[0])]
     # Recreate the Meshes object with the new vertices but the same faces.
     return Meshes(verts=new_verts, faces=mesh.faces_list(), textures=mesh.textures)
+
+
+def vertex_preprocess_from_mesh_path(input_mesh_path: str, translation: torch.Tensor):
+    orig_mesh = load_objs_as_meshes(
+        [input_mesh_path], device=device, load_textures=False
+    ).to(device)
+    verts = orig_mesh.verts_packed()
+    center = verts.median(0)
+    verts = verts - center
+    scale = 2.0 / (verts.abs().max())
+    verts = verts * scale
+    if translation is not None:
+        assert translation.shape(-1) == 3
+        translation = translation.reshape(1, 3)
+        verts = verts + translation
+    return orig_mesh, verts
