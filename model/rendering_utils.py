@@ -17,14 +17,14 @@ from PIL import Image
 
 from scipy.stats import qmc
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DISTANCE_TO_OBJ = 3.0
 
 
 def sample_camera_params(poisson_r: float, n: int, visualize: bool = False):
     # 1-D engine kept; just convert to radians before trig
     eng = qmc.PoissonDisk(d=2, radius=poisson_r, hypersphere="volume")
-    uv = torch.tensor(eng.random(n), dtype=torch.float32)  # u,v ∈ (0,1)
+    uv = torch.tensor(eng.random(n), dtype=torch.float32, device=device)  # u,v ∈ (0,1)
     azim_deg = (uv[:, 0] - 0.5) * 360  # (-180°,180°)
     elev_deg = (uv[:, 1] - 0.5) * 30  # (-10°, 10°)
 
@@ -47,7 +47,7 @@ def sample_camera_params(poisson_r: float, n: int, visualize: bool = False):
         )
         fig.show()
 
-    R, T = look_at_view_transform(DISTANCE_TO_OBJ, elev_deg, azim_deg)
+    R, T = look_at_view_transform(DISTANCE_TO_OBJ, elev_deg, azim_deg, device=device)
     return R, T
 
 
@@ -80,8 +80,8 @@ def render_mono_texture_from_meshes(
     # create mono texture + material properties
     verts = meshes.verts_packed()  # (V, 3)
     merlion_color = (
-        torch.ones((batch_size, verts.shape[0] // batch_size, 3), device=device) * color
-    )
+        torch.ones((batch_size, verts.shape[0] // batch_size, 3)) * color
+    ).to(device)
     meshes.textures = TexturesVertex(verts_features=merlion_color)
     materials = Materials(
         device=device,

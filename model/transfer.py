@@ -28,18 +28,18 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
     batch_size = cfg.get("batch_size", 2)
 
     # load style ref
-    ref_style = torchvision.utils.Image.open(style_reference_path)
+    ref_style = torchvision.utils.Image.open(style_reference_path).to(device)
     ref_style = style_transform(ref_style).unsqueeze(0)
 
-    mse = MSELoss()
-    style_extractor = VGGStyleExtractor()
+    mse = MSELoss().to(device)
+    style_extractor = VGGStyleExtractor().to(device)
     with torch.no_grad():
         ref_style_features = style_extractor(ref_style)  # 1 x 2688 x H/4, W/4
 
     # set up batched meshes and normalize
     orig_mesh = load_objs_as_meshes(
         [input_mesh_path], device=device, load_textures=False
-    )
+    ).to(device)
     verts = orig_mesh.verts_packed()
     center = verts.mean(0)
     verts = verts - center
@@ -49,7 +49,7 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
     # set up optimizer
     verts = verts.requires_grad_(True)
     opt = AdamW([verts])
-    laplace_beltrami = get_combinatorial_laplacian(orig_mesh).to_dense()
+    laplace_beltrami = get_combinatorial_laplacian(orig_mesh).to(device)
 
     # assume: verts (V,3), laplace_beltrami (V,V sparse), style_extractor, renderer cfg set
 
@@ -59,7 +59,7 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
     x_prev = x_hat.clone()
 
     for lam, mask_ratio in zip(LAMBDAS, MASK_RATIOS):
-        mask = torch.rand(V) < mask_ratio
+        mask = (torch.rand(V, device=device) < mask_ratio).to(device)
         A = (I + lam * laplace_beltrami).to_dense()
         L = torch.linalg.cholesky(A)
         x_star = (A @ x_hat).detach().requires_grad_(True)
