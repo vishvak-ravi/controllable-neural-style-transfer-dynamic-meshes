@@ -15,8 +15,7 @@ from style_utils import (
 from rendering_utils import render_mono_texture_from_meshes, render_in_pose
 import PIL
 
-
-N_ITERS = 10
+N_ITERS = 100
 LAMBDAS = [20, 5, 0.5]
 MASK_RATIOS = [0.2, 0.1, 0]
 
@@ -25,11 +24,11 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
 
-    batch_size = cfg.get("batch_size", 2)
+    batch_size = cfg.get("batch_size", 8)
 
     # load style ref
-    ref_style = torchvision.utils.Image.open(style_reference_path).to(device)
-    ref_style = style_transform(ref_style).unsqueeze(0)
+    ref_style = torchvision.utils.Image.open(style_reference_path)
+    ref_style = style_transform(ref_style).unsqueeze(0).to(device)
 
     mse = MSELoss().to(device)
     style_extractor = VGGStyleExtractor().to(device)
@@ -76,7 +75,7 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
                     faces=[orig_mesh.faces_list()[0] for _ in range(batch_size)],
                 ),
                 batch_size=batch_size,
-                poisson_radius=0.4,
+                poisson_radius=0.25,
                 save_name=f"data/renders/{lam}_{i}",
             )
 
@@ -90,10 +89,10 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
 
         x_hat = torch.cholesky_solve(x_star.detach(), L)
         meshes = Meshes(
-            [x_hat for _ in range(batch_size)],
-            faces=[orig_mesh.faces_list()[0] for _ in range(batch_size)],
+            [x_hat],
+            faces=[orig_mesh.faces_list()[0]],
         )
-        render_in_pose(meshes, save_name=f"data/renders/{lam}.png")
+        render_in_pose(meshes, color = torch.tensor([1, 56, 37]) / 255, save_name=f"data/renders/{lam}.png")
 
     return x_hat
 

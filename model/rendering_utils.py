@@ -18,7 +18,7 @@ from PIL import Image
 from scipy.stats import qmc
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DISTANCE_TO_OBJ = 3.0
+DISTANCE_TO_OBJ = 5.0
 
 
 def sample_camera_params(poisson_r: float, n: int, visualize: bool = False):
@@ -88,7 +88,7 @@ def render_mono_texture_from_meshes(
         ambient_color=[[0.75, 0.75, 0.75]],  # boost ambient
         diffuse_color=[[0.8, 0.2, 0.2]],
         specular_color=[[1.0, 1.0, 1.0]],  # brighter highlights
-        shininess=128.0,
+        shininess=12.0,
     )
 
     # sample camera params + lighting
@@ -140,7 +140,7 @@ def render_in_pose(
 ):
     # create mono texture + material properties
     verts = meshes.verts_packed()  # (V, 3)
-    merlion_color = torch.ones((1, verts.shape[0], 3), device=device) * color
+    merlion_color = (torch.ones((1, verts.shape[0], 3)) * color).to(device)
     meshes.textures = TexturesVertex(verts_features=merlion_color)
     materials = Materials(
         device=device,
@@ -193,7 +193,7 @@ def render_in_pose(
     rgb = renderer(meshes).squeeze()[..., :3]
     img = postprocess_pytorch3d_image(rgb)
 
-    Image.fromarray(img.cpu().numpy()).save(f"{save_name}.png")
+    Image.fromarray((img * 255).to(torch.uint8).cpu().numpy()).save(f"{save_name}.png")
 
     return img
 
