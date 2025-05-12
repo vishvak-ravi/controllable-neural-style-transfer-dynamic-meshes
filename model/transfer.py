@@ -2,6 +2,7 @@ import PIL.Image
 import torch, torchvision
 from torch.optim.adamw import AdamW
 from torch.nn import MSELoss
+from torch.utils.tensorboard import SummaryWriter
 from pytorch3d.structures import Meshes
 from pytorch3d.io.obj_io import load_objs_as_meshes
 
@@ -18,6 +19,7 @@ import PIL
 N_ITERS = 100
 LAMBDAS = [20, 5, 0.5]
 MASK_RATIOS = [0.2, 0.1, 0]
+LR = [10.0e-3, 5.0e-3, 1.5e-3]
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -25,6 +27,8 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
 
     batch_size = cfg.get("batch_size", 8)
+    writer = SummaryWriter()  # ← 1-line init
+    global_step = 0
 
     # load style ref
     ref_style = torchvision.utils.Image.open(style_reference_path)
@@ -57,12 +61,12 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
     x_hat = verts.clone()
     x_prev = x_hat.clone()
 
-    for lam, mask_ratio in zip(LAMBDAS, MASK_RATIOS):
+    for lam, mask_ratio, lr in zip(LAMBDAS, MASK_RATIOS, LR):
         mask = (torch.rand(V, device=device) < mask_ratio).to(device)
         A = (I + lam * laplace_beltrami).to_dense()
         L = torch.linalg.cholesky(A)
         x_star = (A @ x_hat).detach().requires_grad_(True)
-        opt = AdamW([x_star])
+        opt = AdamW([x_star], lr=lr)
 
         for i in range(N_ITERS):
             opt.zero_grad()
@@ -84,16 +88,26 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
             repl = nearest_neighbor_replacement(ref_style_features, feats)
             loss = mse(repl, feats)
             loss.backward()
+
+            if global_step % 10 == 0:  # ← log every 10 iters
+                writer.add_scalar("loss", loss.item(), global_step)
+                writer.add_scalar("grad_norm", x_star.grad.norm().item(), global_step)
+
             x_star.grad[mask] = 0
             opt.step()
+            global_step += 1
 
         x_hat = torch.cholesky_solve(x_star.detach(), L)
         meshes = Meshes(
             [x_hat],
             faces=[orig_mesh.faces_list()[0]],
         )
-        render_in_pose(meshes, color = torch.tensor([1, 56, 37]) / 255, save_name=f"data/renders/{lam}.png")
-
+        render_in_pose(
+            meshes,
+            color=torch.tensor([1, 56, 37]) / 255,
+            save_name=f"data/renders/{lam}.png",
+        )
+    writer.close()
     return x_hat
 
 
