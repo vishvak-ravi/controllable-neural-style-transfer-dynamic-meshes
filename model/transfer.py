@@ -19,7 +19,7 @@ import PIL
 N_ITERS = 100
 LAMBDAS = [20, 5, 0.5]
 MASK_RATIOS = [0.2, 0.1, 0]
-LR = [10.0e-3, 5.0e-3, 1.5e-3]
+LR = [5.0e-3, 2.5e-3, 1.5e-3]
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
