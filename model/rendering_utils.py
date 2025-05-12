@@ -89,7 +89,7 @@ def render_mono_texture_from_meshes(
         ambient_color=[[0.75, 0.75, 0.75]],  # boost ambient
         diffuse_color=[[0.8, 0.2, 0.2]],
         specular_color=[[1.0, 1.0, 1.0]],  # brighter highlights
-        shininess=12.0,
+        shininess=6.0,
     )
 
     # sample camera params + lighting
@@ -148,31 +148,21 @@ def render_in_pose(
         ambient_color=[[0.75, 0.75, 0.75]],  # boost ambient
         diffuse_color=[[0.8, 0.2, 0.2]],
         specular_color=[[1.0, 1.0, 1.0]],  # brighter highlights
-        shininess=64.0,
+        shininess=6.0,
     )
 
-    # # sample camera params + lighting
-    # R, T = look_at_view_transform(3.5, 15, 180)
-    # cameras = FoVPerspectiveCameras(device=device, R=R, T=T)
-    # light_pos1 = [-1.0, 0.5, 1.0]
-    # light_pos2 = [1.0, 0.5, -1.0]
-    # lights = PointLights(
-    #     device=device,
-    #     location=[light_pos1, light_pos2],
-    #     ambient_color=[[0.3, 0.3, 0.3], [0.3, 0.3, 0.3]],
-    #     diffuse_color=[[1.0, 1.0, 0.0], [0.0, 1.0, 1.0]],
-    #     specular_color=[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
-    # )
-    R, T = look_at_view_transform(3.5, 15, 180)
-    cameras = PerspectiveCameras(device=device, R=R, T=T)
-    camera_pos = cameras.get_camera_center()
+    # sample camera params + lighting
+    light_pos1 = [-1.0, 0.5, 1.0]
+    light_pos2 = [1.0, 0.5, -1.0]
     lights = PointLights(
         device=device,
-        location=camera_pos,
-        ambient_color=[[0.3, 0.3, 0.3]],
-        diffuse_color=[[1.0, 1.0, 1.0]],
-        specular_color=[[1.0, 1.0, 1.0]],
+        location=[light_pos1, light_pos2],
+        ambient_color=[[0.3, 0.3, 0.3], [0.3, 0.3, 0.3]],
+        diffuse_color=[[1.0, 1.0, 0.0], [0.0, 1.0, 1.0]],
+        specular_color=[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
     )
+    R, T = look_at_view_transform(3.5, 15, 180)
+    cameras = PerspectiveCameras(device=device, R=R, T=T)
 
     # render setup
     raster_settings = RasterizationSettings(
