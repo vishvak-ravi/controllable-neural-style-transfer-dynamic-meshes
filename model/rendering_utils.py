@@ -1,3 +1,4 @@
+import os
 import torch
 from pytorch3d.io.obj_io import load_objs_as_meshes
 from pytorch3d.structures import Meshes
@@ -19,7 +20,7 @@ from PIL import Image
 from scipy.stats import qmc
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DISTANCE_TO_OBJ = 5.0
+DISTANCE_TO_OBJ = 10.0
 
 
 def sample_camera_params(poisson_r: float, n: int, visualize: bool = False):
@@ -127,9 +128,9 @@ def render_mono_texture_from_meshes(
 
     if save_name is not None:
         for i, img in enumerate(imgs):
-            Image.fromarray((img * 255).to(torch.uint8).cpu().numpy()).save(
-                f"{save_name}_{i}.png"
-            )
+            path = f"{save_name}_{i}.png"
+            print("Saving to:", os.path.abspath(path))
+            Image.fromarray((img * 255).to(torch.uint8).cpu().numpy()).save(path)
 
     return imgs
 
@@ -237,5 +238,4 @@ def vertex_preprocess_from_mesh_path(
         assert translation.shape(-1) == 3
         translation = translation.reshape(1, 3)
         verts = verts + translation
-    verts = verts.to(dtype=torch.bfloat16)
     return orig_mesh, verts

@@ -21,9 +21,9 @@ from rendering_utils import (
 import PIL
 
 N_ITERS = 100
-LAMBDAS = torch.tensor([20, 5, 0.5], dtype=torch.bfloat16)
-MASK_RATIOS = torch.tensor([0.2, 0.1, 0], dtype=torch.bfloat16)
-LR = torch.tensor([2.0e-3, 1.0e-3, 0.5e-3], dtype=torch.bfloat16)
+LAMBDAS = torch.tensor([20, 5, 0.5])
+MASK_RATIOS = torch.tensor([0.2, 0.1, 0])
+LR = torch.tensor([2.0e-3, 1.0e-3, 0.5e-3])
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -50,37 +50,39 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
     # set up optimizer
     verts = verts.requires_grad_(True)
     opt = AdamW([verts])
+    print("getting laplacian")
     laplace_beltrami = (
-        get_combinatorial_laplacian(orig_mesh)
-        .coalesce()
-        .to(dtype=torch.bfloat16, device=device)
+        get_combinatorial_laplacian(orig_mesh).to("cpu").to_dense()
     )
+    print("got laplacian")
 
     # assume: verts (V,3), laplace_beltrami (V,V sparse), style_extractor, renderer cfg set
 
     V = verts.size(0)
-    I = torch.sparse_coo_tensor(
-        torch.arange(V, device=device).repeat(2).view(2, -1),
-        torch.ones(V, device=device),
-        (V, V),
-    ).to(dtype=torch.bfloat16)
     x_hat = verts.clone()
     x_prev = x_hat.clone()
 
     for lam, mask_ratio, lr in zip(LAMBDAS, MASK_RATIOS, LR):
-        mask = (torch.rand(V, device=device, dtype=torch.bfloat16) < mask_ratio).to(
+        mask = (torch.rand(V, device=device) < mask_ratio).to(
             device
         )
-        A = I + lam * laplace_beltrami
-        L = torch.linalg.cholesky(A.to_dense())
-        del A
+        print('computed mask')
+        A = laplace_beltrami.clone()
+        A.diagonal().add_(lam)
+        sparsity = (A == 0).sum().item() / A.numel()
+        print(f'sparsity: ', sparsity)
+        print("stRting cholesky")
+        L = torch.linalg.cholesky(A)
+        print("Finished cholesky")
         x_star = (A @ x_hat).detach().requires_grad_(True)
+        print("Got laplacian parameterization")
+        del A
         opt = AdamW([x_star], lr=lr)
-
         for i in range(N_ITERS):
             opt.zero_grad()
 
             x_hat = torch.cholesky_solve(x_star, L)
+            print("solved cholesky")
 
             imgs: torch.Tensor = render_mono_texture_from_meshes(
                 Meshes(
@@ -91,6 +93,7 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
                 poisson_radius=0.25,
                 save_name=f"data/renders/{lam}_{i}",
             )
+            print("rendered!")
 
             imgs = imgs.permute(0, 3, 1, 2)
             feats = style_extractor(render_transform(imgs))
@@ -122,5 +125,5 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
 
 if __name__ == "__main__":
     style_img = "data/styles/swirly.jpg"
-    obj = "data/merlion.obj"
+    obj = "data/merlion_200k.obj"
     output_mesh = transfer_style(style_img, obj)
