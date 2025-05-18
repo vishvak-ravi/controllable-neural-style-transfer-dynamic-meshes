@@ -4,7 +4,7 @@ from pytorch3d.io.obj_io import load_objs_as_meshes
 from pytorch3d.structures import Meshes
 from pytorch3d.renderer import (
     Materials,
-    OrthographicCameras,
+    FoVOrthographicCameras,
     PerspectiveCameras,
     RasterizationSettings,
     BlendParams,
@@ -20,7 +20,7 @@ from PIL import Image
 from scipy.stats import qmc
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DISTANCE_TO_OBJ = 10.0
+DISTANCE_TO_OBJ = 11.0
 
 
 def sample_camera_params(poisson_r: float, n: int, visualize: bool = False):
@@ -88,16 +88,28 @@ def render_mono_texture_from_meshes(
     meshes.textures = TexturesVertex(verts_features=merlion_color)
     materials = Materials(
         device=device,
-        ambient_color=[[0.75, 0.75, 0.75]],  # boost ambient
-        diffuse_color=[[0.8, 0.2, 0.2]],
-        specular_color=[[1.0, 1.0, 1.0]],  # brighter highlights
-        shininess=6.0,
+        ambient_color=[[0.2, 0.2, 0.2]],  # boost ambient
+        diffuse_color=[[0.9, 0.9, 0.9]],
+        specular_color=[[0.3, 0.3, 0.3]],  # brighter highlights
+        shininess=2.0,
     )
 
     # sample camera params + lighting
     R, T = sample_camera_params(poisson_radius, batch_size)
 
-    cameras = OrthographicCameras(device=device, R=R, T=T)
+    # 2. Keep orthographic but shrink the view volume
+# mesh already scaled to [-1, 1] in X-Y, so the symmetric frustum is:
+    cameras = FoVOrthographicCameras(
+        R=R,
+        T=T,
+        device=device,
+        znear=0.01,          # any small positive
+        zfar=10.0,
+        min_x=-1.0, max_x=1.0,
+        min_y=-1.0, max_y=1.0,
+        scale_xyz=((0.5, 0.5, 0.5),)  # raise to zoom out, lower to zoom in
+    )
+
     camera_pos = cameras.get_camera_center()
     lights = PointLights(
         device=device,
@@ -150,7 +162,7 @@ def render_in_pose(
         ambient_color=[[0.75, 0.75, 0.75]],  # boost ambient
         diffuse_color=[[0.8, 0.2, 0.2]],
         specular_color=[[1.0, 1.0, 1.0]],  # brighter highlights
-        shininess=6.0,
+        shininess=2.0,
     )
 
     # sample camera params + lighting

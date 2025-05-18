@@ -29,7 +29,7 @@ import PIL
 N_ITERS = 100
 LAMBDAS = torch.tensor([20, 5, 0.5])
 MASK_RATIOS = torch.tensor([0.2, 0.1, 0])
-LR = torch.tensor([2.0e-3, 1.0e-3, 0.5e-3])
+LR = torch.tensor([8.0e-3, 2.0e-3, 0.5e-3])
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -133,5 +133,5 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
 
 if __name__ == "__main__":
     style_img = "data/styles/swirly.jpg"
-    obj = "data/merlion_200k.obj"
+    obj = "data/spot_280k.obj"
     output_mesh = transfer_style(style_img, obj)
