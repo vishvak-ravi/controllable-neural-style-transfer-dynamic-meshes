@@ -24,6 +24,8 @@ render_transform = Compose([ConvertImageDtype(torch.float32), Resize(VGG_INPUT_S
 
 def get_rotated_style_tensors(img: torchvision.utils.Image.Image, num_rots: int) -> torch.Tensor:
     img = style_transform(img)
+    if img.shape[0] == 4:  # Check if the image has 4 channels
+        img = img[:3]  # Convert to 3 channels by taking the first 3
     rotated_imgs = torch.stack([rotate(img, 360.0 * i / num_rots) for i in range(num_rots)])
     return rotated_imgs
 

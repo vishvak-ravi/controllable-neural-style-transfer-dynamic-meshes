@@ -8,6 +8,7 @@ from pytorch3d.renderer import (
     PerspectiveCameras,
     RasterizationSettings,
     BlendParams,
+    SoftPhongShader,
     HardPhongShader,
     MeshRenderer,
     MeshRasterizer,
@@ -29,7 +30,7 @@ def sample_camera_params(poisson_r: float, n: int, visualize: bool = False):
         eng = qmc.PoissonDisk(d=2, radius=poisson_r, hypersphere="volume")
         uv = torch.tensor(eng.random(n), dtype=torch.float32, device=device)  # u,v ∈ (0,1)
         azim_deg = (uv[:, 0] - 0.5) * 360  # (-180°,180°)
-        elev_deg = (uv[:, 1] - 0.5) * 30  # (-10°, 10°)
+        elev_deg = (uv[:, 1] - 0.5) * 70  # (-35°, 35°)
 
         if visualize:
             import plotly.graph_objects as go
@@ -78,6 +79,7 @@ def render_mono_texture_from_meshes(
     poisson_radius: float,
     color: torch.Tensor = torch.tensor([36, 39, 224]) / 255,
     batch_size: int = 1,
+    blur_radius: float = 1e-3,
     save_name: str = None,
 ):
     # create mono texture + material properties
@@ -88,7 +90,7 @@ def render_mono_texture_from_meshes(
     meshes.textures = TexturesVertex(verts_features=merlion_color)
     materials = Materials(
         device=device,
-        ambient_color=[[0.2, 0.2, 0.2]],  # boost ambient
+        ambient_color=[[0.8, 0.8, 0.8]],  # boost ambient
         diffuse_color=[[0.9, 0.9, 0.9]],
         specular_color=[[0.3, 0.3, 0.3]],  # brighter highlights
         shininess=2.0,
@@ -114,16 +116,15 @@ def render_mono_texture_from_meshes(
     lights = PointLights(
         device=device,
         location=camera_pos,
-        ambient_color=[[0.3, 0.3, 0.3]],
-        diffuse_color=[[1.0, 1.0, 1.0]],
-        specular_color=[[1.0, 1.0, 1.0]],
     )
 
     # render setup
     raster_settings = RasterizationSettings(
-        image_size=700, blur_radius=0.0, faces_per_pixel=50
+        image_size=700, blur_radius=blur_radius, faces_per_pixel=10, bin_size=0
     )
-    blend_params = BlendParams(background_color=(0.0, 0.0, 0.0))
+    blend_params = BlendParams(
+        background_color = (0, 0, 0)
+    )
     renderer = MeshRenderer(
         rasterizer=MeshRasterizer(cameras=cameras, raster_settings=raster_settings),
         shader=HardPhongShader(
@@ -131,12 +132,13 @@ def render_mono_texture_from_meshes(
             cameras=cameras,
             lights=lights,
             materials=materials,
-            blend_params=blend_params,
+            blend_params=blend_params
         ),
     )
 
     # render + show
     rgb = renderer(meshes).squeeze()[..., :3]
+    
     imgs = postprocess_pytorch3d_image(rgb)
 
     if save_name is not None:

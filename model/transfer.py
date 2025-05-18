@@ -4,7 +4,7 @@ from torch.optim.adamw import AdamW
 from torch.nn import MSELoss
 from torch.utils.tensorboard import SummaryWriter
 from pytorch3d.structures import Meshes
-from pytorch3d.io.obj_io import load_objs_as_meshes
+from pytorch3d.io.obj_io import load_objs_as_meshes, save_obj
 from cholesky import cholmod_solve
 import time
 
@@ -24,10 +24,11 @@ from rendering_utils import (
 )
 import PIL
 
-N_ITERS = torch.tensor([50, 50, 25])
+N_ITERS = torch.tensor([50, 50, 120])
 LAMBDAS = torch.tensor([20, 5, 0.5])
 MASK_RATIOS = torch.tensor([0.2, 0.1, 0])
-LR = torch.tensor([8.0e-3, 2.0e-3, 0.5e-3])
+LR = torch.tensor([8.0e-3, 2.0e-3, 0.35e-3])
+BLUR_RADII = torch.tensor([1e-6, 1e-7, 1e-7])
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -62,7 +63,7 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
         x_hat = verts.clone()
         # x_prev = x_hat.clone() # ignore for static meshes
 
-    for lam, mask_ratio, lr, iters in zip(LAMBDAS, MASK_RATIOS, LR, N_ITERS):
+    for lam, mask_ratio, lr, iters, blur_radius in zip(LAMBDAS, MASK_RATIOS, LR, N_ITERS, BLUR_RADII):
         with torch.no_grad():
             mask = (torch.rand(V, device=device) < mask_ratio).to(device)
             print("computed mask")
@@ -98,7 +99,8 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
                     faces=[orig_mesh.faces_list()[0] for _ in range(batch_size)],
                 ),
                 batch_size=batch_size,
-                poisson_radius=0.25,
+                poisson_radius=0.20,
+                blur_radius=blur_radius,
                 save_name=f"data/renders/{lam}_{i}",
             )
             print("rendered!")
@@ -132,10 +134,15 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
             x_hat = cholmod_solve(x_star, L)
 
     writer.close()
-    return x_hat
+    output_mesh = Meshes(
+                    [x_hat],
+                    faces=[orig_mesh.faces_list()[0]],
+                )
+    return output_mesh
 
 
 if __name__ == "__main__":
-    style_img = "data/styles/triangles.png"
+    style_img = "data/styles/blocky_spiral.png"
     obj = "data/spot_280k.obj"
-    output_mesh = transfer_style(style_img, obj)
+    output_mesh: Meshes = transfer_style(style_img, obj)
+    save_obj(f'data/outputs/spot_triangles.obj', output_mesh.verts_list()[0], output_mesh.faces_list()[0])

@@ -128,5 +128,9 @@ class CholmodSolveTest(unittest.TestCase):
         self.assertTrue(torch.allclose(grad_custom, grad_torch,
                                        rtol=1e-5, atol=1e-6))
 
+class RenderTest(unittest.TestCase):
+    def render(self):
+        vertex_preprocess_from_mesh_path()
+
 if __name__ == '__main__':
     unittest.main()
