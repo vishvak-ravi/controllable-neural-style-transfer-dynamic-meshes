@@ -24,33 +24,34 @@ DISTANCE_TO_OBJ = 10.0
 
 
 def sample_camera_params(poisson_r: float, n: int, visualize: bool = False):
-    # 1-D engine kept; just convert to radians before trig
-    eng = qmc.PoissonDisk(d=2, radius=poisson_r, hypersphere="volume")
-    uv = torch.tensor(eng.random(n), dtype=torch.float32, device=device)  # u,v ∈ (0,1)
-    azim_deg = (uv[:, 0] - 0.5) * 360  # (-180°,180°)
-    elev_deg = (uv[:, 1] - 0.5) * 30  # (-10°, 10°)
+    with torch.no_grad():
+        # 1-D engine kept; just convert to radians before trig
+        eng = qmc.PoissonDisk(d=2, radius=poisson_r, hypersphere="volume")
+        uv = torch.tensor(eng.random(n), dtype=torch.float32, device=device)  # u,v ∈ (0,1)
+        azim_deg = (uv[:, 0] - 0.5) * 360  # (-180°,180°)
+        elev_deg = (uv[:, 1] - 0.5) * 30  # (-10°, 10°)
 
-    if visualize:
-        import plotly.graph_objects as go
+        if visualize:
+            import plotly.graph_objects as go
 
-        azim = torch.deg2rad(azim_deg)
-        elev = torch.deg2rad(elev_deg)
-        x = DISTANCE_TO_OBJ * torch.cos(elev) * torch.sin(azim)
-        y = DISTANCE_TO_OBJ * torch.sin(elev)
-        z = DISTANCE_TO_OBJ * torch.cos(elev) * torch.cos(azim)
-        fig = go.Figure(go.Scatter3d(x=x, y=y, z=z, mode="markers"))
-        fig.update_layout(
-            scene=dict(
-                aspectmode="cube",
-                xaxis=dict(range=[-DISTANCE_TO_OBJ, DISTANCE_TO_OBJ]),
-                yaxis=dict(range=[-DISTANCE_TO_OBJ, DISTANCE_TO_OBJ]),
-                zaxis=dict(range=[-DISTANCE_TO_OBJ, DISTANCE_TO_OBJ]),
+            azim = torch.deg2rad(azim_deg)
+            elev = torch.deg2rad(elev_deg)
+            x = DISTANCE_TO_OBJ * torch.cos(elev) * torch.sin(azim)
+            y = DISTANCE_TO_OBJ * torch.sin(elev)
+            z = DISTANCE_TO_OBJ * torch.cos(elev) * torch.cos(azim)
+            fig = go.Figure(go.Scatter3d(x=x, y=y, z=z, mode="markers"))
+            fig.update_layout(
+                scene=dict(
+                    aspectmode="cube",
+                    xaxis=dict(range=[-DISTANCE_TO_OBJ, DISTANCE_TO_OBJ]),
+                    yaxis=dict(range=[-DISTANCE_TO_OBJ, DISTANCE_TO_OBJ]),
+                    zaxis=dict(range=[-DISTANCE_TO_OBJ, DISTANCE_TO_OBJ]),
+                )
             )
-        )
-        fig.show()
+            fig.show()
 
-    R, T = look_at_view_transform(DISTANCE_TO_OBJ, elev_deg, azim_deg, device=device)
-    return R, T
+        R, T = look_at_view_transform(DISTANCE_TO_OBJ, elev_deg, azim_deg, device=device)
+        return R, T
 
 
 def postprocess_pytorch3d_image(
@@ -185,7 +186,9 @@ def render_in_pose(
     rgb = renderer(meshes).squeeze()[..., :3]
     img = postprocess_pytorch3d_image(rgb)
 
-    Image.fromarray((img * 255).to(torch.uint8).cpu().numpy()).save(f"{save_name}.png")
+    Image.fromarray((img * 255).to(torch.uint8).cpu().numpy()).save(
+        f"{save_name}.png"
+    )
 
     return img
 
@@ -212,17 +215,6 @@ if __name__ == "__main__":
     render_in_pose(src_meshes, color=color, save_name="pose")
 
 
-def update_mesh_verts(mesh: Meshes, vertices: torch.Tensor):
-    # If vertices is 2D, assume a single mesh and wrap it in a list.
-    if vertices.ndim == 2:
-        new_verts = [vertices]
-    else:
-        # Otherwise, vertices is assumed to be of shape (B, V, 3) for B meshes.
-        new_verts = [vertices[i] for i in range(vertices.shape[0])]
-    # Recreate the Meshes object with the new vertices but the same faces.
-    return Meshes(verts=new_verts, faces=mesh.faces_list(), textures=mesh.textures)
-
-
 def vertex_preprocess_from_mesh_path(
     input_mesh_path: str, translation: torch.Tensor = None
 ):
@@ -235,7 +227,7 @@ def vertex_preprocess_from_mesh_path(
     scale = 2.0 / (verts.abs().max())
     verts = verts * scale
     if translation is not None:
-        assert translation.shape(-1) == 3
+        assert translation.shape[-1] == 3
         translation = translation.reshape(1, 3)
         verts = verts + translation
     return orig_mesh, verts

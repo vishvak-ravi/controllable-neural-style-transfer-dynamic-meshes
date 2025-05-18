@@ -5,6 +5,7 @@ from torch.nn import MSELoss
 from torch.utils.tensorboard import SummaryWriter
 from pytorch3d.structures import Meshes
 from pytorch3d.io.obj_io import load_objs_as_meshes
+from cholesky import cholmod_solve
 
 from style_utils import (
     VGGStyleExtractor,
@@ -12,6 +13,9 @@ from style_utils import (
     render_transform,
     nearest_neighbor_replacement,
     get_combinatorial_laplacian,
+    cholesky_factor,
+    CholeskySolveRoutine,
+    CholeskyFactorRoutine,
 )
 from rendering_utils import (
     render_mono_texture_from_meshes,
@@ -43,45 +47,39 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
     with torch.no_grad():
         ref_style_features = style_extractor(ref_style)  # 1 x 2688 x H/4, W/4
 
-    # set up batched meshes and normalize
-    # vert_wc_translation = torch.Tensor([0.0, -0.25, 0.0])
-    orig_mesh, verts = vertex_preprocess_from_mesh_path(input_mesh_path)
+        # set up batched meshes and normalize
+        # vert_wc_translation = torch.Tensor([0.0, -0.25, 0.0])
 
-    # set up optimizer
-    verts = verts.requires_grad_(True)
-    opt = AdamW([verts])
-    print("getting laplacian")
-    laplace_beltrami = (
-        get_combinatorial_laplacian(orig_mesh).to("cpu").to_dense()
-    )
-    print("got laplacian")
+        orig_mesh, verts = vertex_preprocess_from_mesh_path(input_mesh_path)
+        print("getting laplacian")
+        laplace_beltrami = get_combinatorial_laplacian(orig_mesh)
 
-    # assume: verts (V,3), laplace_beltrami (V,V sparse), style_extractor, renderer cfg set
+        # assume: verts (V,3), laplace_beltrami (V,V sparse), style_extractor, renderer cfg set
 
-    V = verts.size(0)
-    x_hat = verts.clone()
-    x_prev = x_hat.clone()
+        V = verts.size(0)
+        x_hat = verts.clone()
+        # x_prev = x_hat.clone() # ignore for static meshes
 
     for lam, mask_ratio, lr in zip(LAMBDAS, MASK_RATIOS, LR):
-        mask = (torch.rand(V, device=device) < mask_ratio).to(
-            device
-        )
-        print('computed mask')
-        A = laplace_beltrami.clone()
-        A.diagonal().add_(lam)
-        sparsity = (A == 0).sum().item() / A.numel()
-        print(f'sparsity: ', sparsity)
-        print("stRting cholesky")
-        L = torch.linalg.cholesky(A)
-        print("Finished cholesky")
-        x_star = (A @ x_hat).detach().requires_grad_(True)
-        print("Got laplacian parameterization")
-        del A
+        with torch.no_grad():
+            mask = (torch.rand(V, device=device) < mask_ratio).to(device)
+            print("computed mask")
+            A = laplace_beltrami.clone()
+            A.diagonal().add_(lam)  # still sparse
+            sparsity = (A == 0).sum().item() / A.numel()
+            print(f"sparsity: ", sparsity)
+            print("starting cholesky")
+            L = cholesky_factor(A, CholeskyFactorRoutine.TORCH, log_time=True, device="cpu", dense=False)
+            print("Finished cholesky")
+            x_star = A @ x_hat
+            print("Got laplacian parameterization")
+            del A
+        x_star.requires_grad_(True)
         opt = AdamW([x_star], lr=lr)
         for i in range(N_ITERS):
             opt.zero_grad()
-
-            x_hat = torch.cholesky_solve(x_star, L)
+            x_hat = cholmod_solve(x_star L)
+            #x_hat = torch.cholesky_solve(x_star, L)
             print("solved cholesky")
 
             imgs: torch.Tensor = render_mono_texture_from_meshes(

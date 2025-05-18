@@ -10,6 +10,11 @@ from torchvision.transforms.transforms import (
     ConvertImageDtype,
 )
 from pytorch3d.structures import Meshes
+from sksparse.cholmod import cholesky
+import scipy.sparse as sp
+
+from enum import Enum
+import time
 
 VGG_INPUT_SHAPE = (224, 224)
 style_transform = Compose([ToTensor(), CenterCrop(VGG_INPUT_SHAPE)])
@@ -30,7 +35,7 @@ class VGGStyleExtractor(nn.Module):
         interpolated_features = []
         for layer in self.features:
             x = layer(x)
-            
+
             if isinstance(layer, nn.ReLU):
                 interpolated_features.append(
                     F.interpolate(
@@ -89,13 +94,20 @@ def nearest_neighbor_replacement(
     return recon.permute(0, 2, 1).contiguous().view(N, C, H, W)
 
 
-def get_combinatorial_laplacian(mesh: Meshes) -> torch.Tensor:
+class LaplacianRoutine(Enum):
+    TORCH3D = 0
+    CUSTOM = 1
+
+
+def get_combinatorial_laplacian(
+    mesh: Meshes, routine: LaplacianRoutine, log_time: bool
+) -> torch.Tensor:
+
+    # build undirected edge list
     # packed verts/faces
     verts = mesh.verts_packed()  # (V, 3)
     faces = mesh.faces_packed()  # (F, 3)
     V = verts.size(0)
-
-    # build undirected edge list
     fe = torch.cat(
         [faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]], dim=0
     )  # (3F, 2)
@@ -116,8 +128,62 @@ def get_combinatorial_laplacian(mesh: Meshes) -> torch.Tensor:
     ).t()  # (2, E + V)
     vals = torch.cat([off_vals, deg], dim=0)  # (E + V,)
 
-    L = torch.sparse_coo_tensor(idx, vals, (V, V))
+    L = torch.sparse_csc_tensor(idx, vals, (V, V))
     return L
+
+
+class CholeskyFactorRoutine(Enum):
+    TORCH = 0
+    CHOLMOD = 1
+    MAGMA_DENSE = 2
+    MAGMA_SPARSE = 3
+
+
+def cholesky_factor(
+    A: torch.Tensor,
+    routine: CholeskyFactorRoutine,
+    log_time: bool,
+    device: torch.device,
+    dense: bool,
+):
+    """
+    A must be CSC sparse and may return a dense or sparse lower cholesky factor based on the routine.
+    Assumption is A is too large to fit onto GPU, so L is always returned on CPU or sparse (CSC) on GPU as torch.Tensor
+
+    TORCH: since A is large, factor is computed on CPU
+    CHOLMOD: cholmod is CPU only
+
+    device: location of L
+    dense: True if L is returned as dense else False
+    """
+
+    if device == "cuda":
+        assert not dense
+
+    if log_time:
+        t0 = time.time()
+
+    if routine == CholeskyFactorRoutine.TORCH:  # returns on same device as argument
+        A = A.to(device).to_dense()
+        print(f"Cholesky factored in %f3.2 s", time.time() - t0)
+        factor = torch.linalg.cholesky(A)
+    if routine == CholeskyFactorRoutine.CHOLMOD:  # returns as CPU only
+        A = A.coalesce()
+        indptr = A.crow_indices().cpu().numpy()
+        indices = A.col_indices().cpu().numpy()
+        data = A.values().cpu().numpy()
+        n = A.size(0)
+        spA = sp.csc_matrix((data, indices, indptr), shape=(n, n))
+        factor = cholesky(spA)
+        print(f"Cholesky factored in %f3.2 s", time.time() - t0)
+        return factor
+
+
+class CholeskySolveRoutine(Enum):
+    TORCH = 0
+    CHOLMOD = 0
+    MAGMA_DENSE = 2
+    MAGMA_SPARSE = 3
 
 
 if __name__ == "__main__":
