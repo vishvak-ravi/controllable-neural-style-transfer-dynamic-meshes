@@ -102,6 +102,9 @@ class LaplacianRoutine(Enum):
 def get_combinatorial_laplacian(
     mesh: Meshes, routine: LaplacianRoutine, log_time: bool
 ) -> torch.Tensor:
+    
+    if log_time:
+        t0 = time.time()
 
     # build undirected edge list
     # packed verts/faces
@@ -114,7 +117,6 @@ def get_combinatorial_laplacian(
     edges = torch.cat([fe, fe[:, [1, 0]]], dim=0)  # both directions
     edges = torch.unique(edges, dim=0)  # (E, 2)
     i, j = edges.t()
-
     # off-diag: -1 for each edge
     off_vals = -torch.ones(i.size(0), device=verts.device)
 
@@ -122,14 +124,19 @@ def get_combinatorial_laplacian(
     deg = torch.zeros(V, device=verts.device)
     deg.scatter_add_(0, i, -off_vals)
 
-    # assemble sparse Laplacian
+    # assemble sparse Laplacian in COO format
     idx = torch.cat(
         [edges, torch.stack([torch.arange(V, device=verts.device)] * 2, dim=1)], dim=0
     ).t()  # (2, E + V)
     vals = torch.cat([off_vals, deg], dim=0)  # (E + V,)
 
-    L = torch.sparse_csc_tensor(idx, vals, (V, V))
-    return L
+    # convert COO tensor to CSC format by first converting to CSR then transposing
+    L_coo = torch.sparse_coo_tensor(idx, vals, (V, V))
+    
+    if log_time:
+        print(f"Got laplacian in {time.time() - t0}s")
+    
+    return L_coo
 
 
 class CholeskyFactorRoutine(Enum):
@@ -147,7 +154,7 @@ def cholesky_factor(
     dense: bool,
 ):
     """
-    A must be CSC sparse and may return a dense or sparse lower cholesky factor based on the routine.
+    A must be COO sparse and may return a dense or sparse lower cholesky factor based on the routine.
     Assumption is A is too large to fit onto GPU, so L is always returned on CPU or sparse (CSC) on GPU as torch.Tensor
 
     TORCH: since A is large, factor is computed on CPU
@@ -168,7 +175,8 @@ def cholesky_factor(
         print(f"Cholesky factored in %f3.2 s", time.time() - t0)
         factor = torch.linalg.cholesky(A)
     if routine == CholeskyFactorRoutine.CHOLMOD:  # returns as CPU only
-        A = A.coalesce()
+        # Ensure A is coalesced and convert it to CSR to obtain proper indices for scipy CSC conversion
+        A = A.coalesce().to_sparse_csr()
         indptr = A.crow_indices().cpu().numpy()
         indices = A.col_indices().cpu().numpy()
         data = A.values().cpu().numpy()

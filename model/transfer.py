@@ -6,6 +6,7 @@ from torch.utils.tensorboard import SummaryWriter
 from pytorch3d.structures import Meshes
 from pytorch3d.io.obj_io import load_objs_as_meshes
 from cholesky import cholmod_solve
+import time
 
 from style_utils import (
     VGGStyleExtractor,
@@ -16,6 +17,7 @@ from style_utils import (
     cholesky_factor,
     CholeskySolveRoutine,
     CholeskyFactorRoutine,
+    LaplacianRoutine
 )
 from rendering_utils import (
     render_mono_texture_from_meshes,
@@ -52,7 +54,7 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
 
         orig_mesh, verts = vertex_preprocess_from_mesh_path(input_mesh_path)
         print("getting laplacian")
-        laplace_beltrami = get_combinatorial_laplacian(orig_mesh)
+        laplace_beltrami = get_combinatorial_laplacian(orig_mesh, LaplacianRoutine.CUSTOM, log_time=True)
 
         # assume: verts (V,3), laplace_beltrami (V,V sparse), style_extractor, renderer cfg set
 
@@ -64,13 +66,18 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
         with torch.no_grad():
             mask = (torch.rand(V, device=device) < mask_ratio).to(device)
             print("computed mask")
-            A = laplace_beltrami.clone()
-            A.diagonal().add_(lam)  # still sparse
-            sparsity = (A == 0).sum().item() / A.numel()
-            print(f"sparsity: ", sparsity)
+            
+            A = laplace_beltrami.clone() # compute A = I * lambda + Laplace
+            A = A.coalesce()
+            diag_mask = A.indices()[0] == A.indices()[1]
+            A.values()[diag_mask] += lam
+            
             print("starting cholesky")
-            L = cholesky_factor(A, CholeskyFactorRoutine.TORCH, log_time=True, device="cpu", dense=False)
-            print("Finished cholesky")
+            t0 = time.time()
+            L = cholesky_factor(A, CholeskyFactorRoutine.CHOLMOD, log_time=True, device="cpu", dense=False)
+            print(f'got lower cholesky in {time.time() - t0} s')
+            A = A.to(device)
+            
             x_star = A @ x_hat
             print("Got laplacian parameterization")
             del A
@@ -78,9 +85,12 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
         opt = AdamW([x_star], lr=lr)
         for i in range(N_ITERS):
             opt.zero_grad()
-            x_hat = cholmod_solve(x_star L)
+            t0 = time.time()
+            print("solving cholesky")
+            x_hat = cholmod_solve(x_star, L)
+            x_hat = x_hat.to(device)
             #x_hat = torch.cholesky_solve(x_star, L)
-            print("solved cholesky")
+            print(f'solved cholesky in {time.time() - t0} s')
 
             imgs: torch.Tensor = render_mono_texture_from_meshes(
                 Meshes(

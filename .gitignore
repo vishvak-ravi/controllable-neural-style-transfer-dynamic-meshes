@@ -1,3 +1,4 @@
 data/renders
 **__pycache__**
 **.DS_Store**
+runs/
