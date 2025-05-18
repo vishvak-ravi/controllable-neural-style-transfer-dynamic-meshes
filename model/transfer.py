@@ -21,12 +21,11 @@ from style_utils import (
 )
 from rendering_utils import (
     render_mono_texture_from_meshes,
-    render_in_pose,
     vertex_preprocess_from_mesh_path,
 )
 import PIL
 
-N_ITERS = 100
+N_ITERS = torch.tensor([75, 50, 25])
 LAMBDAS = torch.tensor([20, 5, 0.5])
 MASK_RATIOS = torch.tensor([0.2, 0.1, 0])
 LR = torch.tensor([8.0e-3, 2.0e-3, 0.5e-3])
@@ -62,15 +61,15 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
         x_hat = verts.clone()
         # x_prev = x_hat.clone() # ignore for static meshes
 
-    for lam, mask_ratio, lr in zip(LAMBDAS, MASK_RATIOS, LR):
+    for lam, mask_ratio, lr, iters in zip(LAMBDAS, MASK_RATIOS, LR, N_ITERS):
         with torch.no_grad():
             mask = (torch.rand(V, device=device) < mask_ratio).to(device)
             print("computed mask")
             
-            A = laplace_beltrami.clone() # compute A = I * lambda + Laplace
+            A = laplace_beltrami.clone() * lam # compute A = I * lambda + Laplace
             A = A.coalesce()
             diag_mask = A.indices()[0] == A.indices()[1]
-            A.values()[diag_mask] += lam
+            A.values()[diag_mask] += 1
             
             print("starting cholesky")
             t0 = time.time()
@@ -83,7 +82,7 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
             del A
         x_star.requires_grad_(True)
         opt = AdamW([x_star], lr=lr)
-        for i in range(N_ITERS):
+        for i in range(iters):
             opt.zero_grad()
             t0 = time.time()
             print("solving cholesky")
@@ -105,7 +104,9 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
 
             imgs = imgs.permute(0, 3, 1, 2)
             feats = style_extractor(render_transform(imgs))
-            repl = nearest_neighbor_replacement(ref_style_features, feats)
+            print(ref_style_features.shape)
+            print(feats.shape)
+            repl = nearest_neighbor_replacement(ref_style_features, feats, tau=1e10)
             loss = mse(repl, feats)
             loss.backward()
 
@@ -117,16 +118,9 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
             opt.step()
             global_step += 1
 
-        x_hat = torch.cholesky_solve(x_star.detach(), L)
-        meshes = Meshes(
-            [x_hat],
-            faces=[orig_mesh.faces_list()[0]],
-        )
-        render_in_pose(
-            meshes,
-            color=torch.tensor([1, 56, 37]) / 255,
-            save_name=f"data/renders/{lam}.png",
-        )
+        with torch.no_grad():
+            x_hat = cholmod_solve(x_star, L)
+
     writer.close()
     return x_hat
 

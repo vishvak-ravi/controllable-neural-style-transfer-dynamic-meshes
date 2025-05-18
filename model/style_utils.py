@@ -14,6 +14,7 @@ from sksparse.cholmod import cholesky
 import scipy.sparse as sp
 
 from enum import Enum
+from typing import Optional
 import time
 
 VGG_INPUT_SHAPE = (224, 224)
@@ -48,6 +49,76 @@ class VGGStyleExtractor(nn.Module):
         ).unsqueeze(-1).unsqueeze(-1)
         return interpolated_features
 
+
+def hard_nearest_neighbor_replacement(ref_feats: torch.Tensor,
+                                 extracted_feats: torch.Tensor) -> torch.Tensor:
+    """
+    Each feature vector in `extracted_feats` (B,C,H,W) is replaced by the
+    closest feature (ℓ2) in `ref_feats` (R,C,H,W).  R is usually 1.
+    Output shape = (B,C,H,W).
+    """
+    R, C, H, W = ref_feats.shape            # reference
+    B          = extracted_feats.shape[0]    # extracted batches
+
+    # (R·H·W, C) and (B·H·W, C)
+    ref_flat = ref_feats.permute(0,2,3,1).reshape(-1, C)
+    ext_flat = extracted_feats.permute(0,2,3,1).reshape(-1, C)
+
+    # pair-wise distances: (BHW, RHW)  -> argmin over references
+    idx      = torch.cdist(ext_flat, ref_flat).argmin(dim=1)
+
+    # gather nearest reference vectors
+    nearest  = ref_flat[idx]                # (BHW, C)
+
+    # reshape back to (B,C,H,W)
+    return nearest.reshape(B, H, W, C).permute(0,3,1,2)
+
+def soft_nearest_neighbor(
+    style: torch.Tensor,          # (1,C,Hs,Ws) or (C,Hs,Ws)
+    content: torch.Tensor,        # (N,C,H,W)
+    tau: float = 10.0,
+    eps: float = 1e-8,
+    chunk: Optional[int] = None,  # max #content patches per block (memory cap)
+) -> torch.Tensor:
+    """
+    Differentiable, batched, cosine-based soft NN replacement.
+
+    Returns: (N,C,H,W)
+    """
+    if style.dim() == 4:                        # squeeze batch dim if present
+        style = style.squeeze(0)               # (C,Hs,Ws)
+
+    C, Hs, Ws = style.shape
+    N, _, H, W = content.shape
+    Ps, P = Hs * Ws, H * W                     # #style / #content patches
+
+    # --- flatten ---
+    style_flat = style.permute(1, 2, 0).reshape(Ps, C)          # (Ps,C)
+    cont_flat  = content.permute(0, 2, 3, 1).reshape(N, P, C)   # (N,P,C)
+
+    # --- ℓ2-normalise (cosine sim) ---
+    style_n = style_flat / (style_flat.norm(dim=1, keepdim=True) + eps)     # (Ps,C)
+    cont_n  = cont_flat  / (cont_flat.norm(dim=2, keepdim=True) + eps)      # (N,P,C)
+
+    style_n_T  = style_n.t().unsqueeze(0)        # (1,C,Ps)
+    style_flat_T = style_flat.unsqueeze(0)       # (1,Ps,C)
+
+    # helper to compute block [i:j] to fit memory
+    def _replace(block: torch.Tensor) -> torch.Tensor:          # block: (N,b,C)
+        sim = torch.bmm(block, style_n_T.expand(N, -1, -1))     # (N,b,Ps)
+        w   = torch.softmax(sim * tau, dim=2)                   # (N,b,Ps)
+        return torch.bmm(w, style_flat_T.expand(N, -1, -1))     # (N,b,C)
+
+    if chunk is None or P <= chunk:
+        recon = _replace(cont_n)                                # (N,P,C)
+    else:                                                       # chunked to save mem
+        outs = []
+        for i in range(0, P, chunk):
+            j = min(i + chunk, P)
+            outs.append(_replace(cont_n[:, i:j]))
+        recon = torch.cat(outs, dim=1)                          # (N,P,C)
+
+    return recon.reshape(N, H, W, C).permute(0, 3, 1, 2).contiguous()
 
 def nearest_neighbor_replacement(
     style_features: torch.Tensor,

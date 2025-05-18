@@ -148,63 +148,6 @@ def render_mono_texture_from_meshes(
     return imgs
 
 
-def render_in_pose(
-    meshes: Meshes,
-    color: torch.Tensor,
-    save_name: str = None,
-):
-    # create mono texture + material properties
-    verts = meshes.verts_packed()  # (V, 3)
-    merlion_color = (torch.ones((1, verts.shape[0], 3)) * color).to(device)
-    meshes.textures = TexturesVertex(verts_features=merlion_color)
-    materials = Materials(
-        device=device,
-        ambient_color=[[0.75, 0.75, 0.75]],  # boost ambient
-        diffuse_color=[[0.8, 0.2, 0.2]],
-        specular_color=[[1.0, 1.0, 1.0]],  # brighter highlights
-        shininess=2.0,
-    )
-
-    # sample camera params + lighting
-    light_pos1 = [-1.0, 0.5, 1.0]
-    light_pos2 = [1.0, 0.5, -1.0]
-    lights = PointLights(
-        device=device,
-        location=[light_pos1, light_pos2],
-        ambient_color=[[0.3, 0.3, 0.3], [0.3, 0.3, 0.3]],
-        diffuse_color=[[1.0, 1.0, 0.0], [0.0, 1.0, 1.0]],
-        specular_color=[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
-    )
-    R, T = look_at_view_transform(3.5, 15, 180)
-    cameras = PerspectiveCameras(device=device, R=R, T=T)
-
-    # render setup
-    raster_settings = RasterizationSettings(
-        image_size=512, blur_radius=0.0, faces_per_pixel=50
-    )
-    blend_params = BlendParams(background_color=(0.0, 0.0, 0.0))
-    renderer = MeshRenderer(
-        rasterizer=MeshRasterizer(cameras=cameras, raster_settings=raster_settings),
-        shader=HardPhongShader(
-            device=device,
-            cameras=cameras,
-            lights=lights,
-            materials=materials,
-            blend_params=blend_params,
-        ),
-    )
-
-    # render + show
-    rgb = renderer(meshes).squeeze()[..., :3]
-    img = postprocess_pytorch3d_image(rgb)
-
-    Image.fromarray((img * 255).to(torch.uint8).cpu().numpy()).save(
-        f"{save_name}.png"
-    )
-
-    return img
-
-
 if __name__ == "__main__":
     color = torch.tensor([1, 56, 37]) / 255
 
