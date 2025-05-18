@@ -121,7 +121,7 @@ def render_mono_texture_from_meshes(
 
     # render setup
     raster_settings = RasterizationSettings(
-        image_size=700, blur_radius=0.0, faces_per_pixel=25
+        image_size=700, blur_radius=0.0, faces_per_pixel=50
     )
     blend_params = BlendParams(background_color=(0.0, 0.0, 0.0))
     renderer = MeshRenderer(
@@ -146,28 +146,6 @@ def render_mono_texture_from_meshes(
             Image.fromarray((img * 255).to(torch.uint8).cpu().numpy()).save(path)
 
     return imgs
-
-
-if __name__ == "__main__":
-    color = torch.tensor([1, 56, 37]) / 255
-
-    input_mesh_path = "./data/merlion.obj"
-    batch_size = 1
-
-    orig_mesh = load_objs_as_meshes(
-        [input_mesh_path], device=device, load_textures=False
-    )
-    verts = orig_mesh.verts_packed()
-    center = verts.mean(0)
-    verts = verts - center
-    scale = 2.0 / (verts.abs().max())
-    verts = verts * scale
-    src_meshes = Meshes(
-        verts=[verts for _ in range(batch_size)],
-        faces=[orig_mesh.faces_list()[0] for _ in range(batch_size)],
-    )
-
-    render_in_pose(src_meshes, color=color, save_name="pose")
 
 
 def vertex_preprocess_from_mesh_path(

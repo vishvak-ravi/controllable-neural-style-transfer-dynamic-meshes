@@ -9,6 +9,7 @@ from torchvision.transforms.transforms import (
     Resize,
     ConvertImageDtype,
 )
+from torchvision.transforms.functional import rotate
 from pytorch3d.structures import Meshes
 from sksparse.cholmod import cholesky
 import scipy.sparse as sp
@@ -18,9 +19,13 @@ from typing import Optional
 import time
 
 VGG_INPUT_SHAPE = (224, 224)
-style_transform = Compose([ToTensor(), CenterCrop(VGG_INPUT_SHAPE)])
+style_transform = Compose([Resize(VGG_INPUT_SHAPE[0]), ToTensor(), CenterCrop(VGG_INPUT_SHAPE)])
 render_transform = Compose([ConvertImageDtype(torch.float32), Resize(VGG_INPUT_SHAPE)])
 
+def get_rotated_style_tensors(img: torchvision.utils.Image.Image, num_rots: int) -> torch.Tensor:
+    img = style_transform(img)
+    rotated_imgs = torch.stack([rotate(img, 360.0 * i / num_rots) for i in range(num_rots)])
+    return rotated_imgs
 
 class VGGStyleExtractor(nn.Module):
     def __init__(self, output_size=(56, 56)):
@@ -121,48 +126,45 @@ def soft_nearest_neighbor(
     return recon.reshape(N, H, W, C).permute(0, 3, 1, 2).contiguous()
 
 def nearest_neighbor_replacement(
-    style_features: torch.Tensor,
-    content_features: torch.Tensor,
+    style_features: torch.Tensor,          # (C, Hs, Ws) or (B, C, Hs, Ws)
+    content_features: torch.Tensor,        # (N, C, H, W)
     tau: float = 10.0,
     eps: float = 1e-8,
 ) -> torch.Tensor:
     """
-    Soft-nearest-neighbor replacement that preserves gradients.
-
-    Args
-    ----
-    style_features   : (C, Hs, Ws) or (1, C, Hs, Ws) tensor
-    content_features : (N, C, H, W) tensor
-    tau              : temperature; larger → harder assignment
-    eps              : numerical stability
-
-    Returns
-    -------
-    Tensor of shape (N, C, H, W)
+    Soft-nearest-neighbor feature replacement with stable gradients.
+    Returns (N, C, H, W).
     """
-    # Flatten spatial dims
-    if style_features.dim() == 4:  # (1,C,Hs,Ws) → (C,Hs,Ws)
-        style_features = style_features.squeeze(0)
-    N, C, H, W = content_features.shape
-    P = H * W  # #content patches
-    cf = content_features.view(N, C, P)  # (N, C, P)
-    sf = style_features.view(C, -1)  # (C, Ps)
+    # ---------- flatten style patches ----------
+    if style_features.dim() == 4:          # batched styles
+        B, C, Hs, Ws = style_features.shape
+        style_features = (style_features      # (B, C, Hs, Ws)
+                          .permute(1, 0, 2, 3) # → (C, B, Hs, Ws)
+                          .reshape(C, B * Hs * Ws))
+    else:                                  # single style image
+        C, Hs, Ws = style_features.shape
+        style_features = style_features.reshape(C, Hs * Ws)  # (C, Ps)
 
-    # Cosine similarity
-    cf_norm = cf / (cf.norm(dim=1, keepdim=True) + eps)
-    sf_norm = sf / (sf.norm(dim=0, keepdim=True) + eps)
-    sims = torch.bmm(
-        cf_norm.transpose(1, 2), sf_norm.unsqueeze(0).expand(N, -1, -1)  # (N, P, C)
-    )  # (N, C, Ps) → (N, P, Ps)
+    # ---------- flatten content patches ----------
+    N, C_c, H, W = content_features.shape
+    assert C_c == style_features.size(0), "channel mismatch"
+    P = H * W
+    cf = content_features.reshape(N, C, P)          # (N, C, P)
 
-    # Soft assignment over style patches
-    weights = torch.softmax(sims * tau, dim=2)  # (N, P, Ps)
+    # ---------- cosine similarities ----------
+    cf_norm = cf / (cf.norm(dim=1, keepdim=True) + eps)          # (N, C, P)
+    sf_norm = style_features / (style_features.norm(dim=0, keepdim=True) + eps)  # (C, Ps)
+    sims = torch.bmm(cf_norm.transpose(1, 2),                    # (N, P, C)
+                     sf_norm.expand(N, -1, -1))                  # (N, P, Ps)
 
-    # Weighted sum of style patches
-    sf_T = sf.t().unsqueeze(0).expand(N, -1, -1)  # (N, Ps, C)
-    recon = torch.bmm(weights, sf_T)  # (N, P, C)
+    # ---------- soft assignment ----------
+    weights = torch.softmax(sims * tau, dim=2)                   # (N, P, Ps)
 
-    return recon.permute(0, 2, 1).contiguous().view(N, C, H, W)
+    # ---------- reconstruction ----------
+    recon = torch.bmm(weights,                                   # (N, P, Ps)
+                      style_features.t().expand(N, -1, -1))      # (N, P, C)
+    return recon.permute(0, 2, 1).reshape(N, C, H, W)
+
 
 
 class LaplacianRoutine(Enum):

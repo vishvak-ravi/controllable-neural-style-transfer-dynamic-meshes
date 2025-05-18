@@ -6,7 +6,8 @@ import torch
 from pytorch3d.structures import Meshes
 import matplotlib.pyplot as plt
 
-torch.set_grad_enabled(False)
+import unittest, torch, numpy as np, scipy.sparse as sp
+from model.cholesky import build_chol_factor, cholmod_solve
 
 
 class TestLaplaceCreation(unittest.TestCase):
@@ -26,7 +27,6 @@ class TestNearestNeighbor(unittest.TestCase):
         extracted_feats = ref_feats + torch.randn((2, 5, 2, 2)) * 0.0001
         replaced_feats = hard_nearest_neighbor_replacement(ref_feats, extracted_feats)
         soft_feats = soft_nearest_neighbor(ref_feats, extracted_feats, tau=1e8)
-        custom_feats = nearest_neighbor_replacement(ref_feats, extracted_feats, tau=1e8)
         self.assertTrue(torch.allclose(ref_feats, replaced_feats))
         self.assertTrue(torch.allclose(ref_feats, soft_feats))
         
@@ -83,6 +83,50 @@ class TestBackwardsCholeskySolve(unittest.TestCase):
     def test_solve(self):
         # TODO: implement test for backwards cholesky solve
         pass
+
+def rand_spd(n: int, eps: float = 1e-2) -> sp.csr_matrix:
+    m = np.random.randn(n, n)
+    return sp.csr_matrix(m.T @ m + eps * np.eye(n))
+
+class CholmodSolveTest(unittest.TestCase):
+    def setUp(self):
+        self.n = 8
+        self.A = rand_spd(self.n)
+        self.factor = build_chol_factor(self.A)
+
+    def test_forward_matches_scipy(self):
+        x = torch.randn(self.n, dtype=torch.double)  # Use float64 for consistency
+        y = cholmod_solve(x, self.factor)
+        ref = torch.from_numpy(self.factor.solve_A(x.numpy())).to(x.dtype)  # Match dtype
+        self.assertTrue(torch.allclose(y.cpu(), ref, rtol=1e-5, atol=1e-6))
+
+    def test_gradcheck(self):
+        x = torch.randn(self.n, dtype=torch.double, requires_grad=True)
+        f = lambda v: cholmod_solve(v, self.factor)
+        self.assertTrue(torch.autograd.gradcheck(f, (x,), eps=1e-6, atol=1e-4, rtol=1e-3))
+        
+    def test_gradients_match_torch_solver(self):
+        """Backward pass identical to torch.linalg.solve / Cholesky."""
+        # dense copy for PyTorch
+        A_t = torch.as_tensor(self.A.toarray(), dtype=torch.double)
+        torch_factor = torch.linalg.cholesky(A_t)
+
+        # --- Custom autograd ---
+        x1 = torch.randn(self.n, dtype=torch.double, requires_grad=True)
+        y1 = cholmod_solve(x1, self.factor)
+        loss1 = (y1 * torch.arange(1., self.n + 1)).sum()  # non-trivial scalar
+        loss1.backward()
+        grad_custom = x1.grad.detach().clone()
+
+        # --- Reference (built-in) ---
+        x2 = x1.detach().clone().requires_grad_()
+        y2 = torch.cholesky_solve(x2.unsqueeze(1), torch_factor).squeeze(1)
+        loss2 = (y2 * torch.arange(1., self.n + 1)).sum()
+        loss2.backward()
+        grad_torch = x2.grad
+
+        self.assertTrue(torch.allclose(grad_custom, grad_torch,
+                                       rtol=1e-5, atol=1e-6))
 
 if __name__ == '__main__':
     unittest.main()

@@ -10,12 +10,11 @@ import time
 
 from style_utils import (
     VGGStyleExtractor,
-    style_transform,
+    get_rotated_style_tensors,
     render_transform,
     nearest_neighbor_replacement,
     get_combinatorial_laplacian,
     cholesky_factor,
-    CholeskySolveRoutine,
     CholeskyFactorRoutine,
     LaplacianRoutine
 )
@@ -25,7 +24,7 @@ from rendering_utils import (
 )
 import PIL
 
-N_ITERS = torch.tensor([75, 50, 25])
+N_ITERS = torch.tensor([50, 50, 25])
 LAMBDAS = torch.tensor([20, 5, 0.5])
 MASK_RATIOS = torch.tensor([0.2, 0.1, 0])
 LR = torch.tensor([8.0e-3, 2.0e-3, 0.5e-3])
@@ -35,19 +34,21 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
 
-    batch_size = cfg.get("batch_size", 8)
+    batch_size = cfg.get("batch_size", 4)
+    num_rots = cfg.get("num_rotations", 4)
     writer = SummaryWriter()  # ← 1-line init
     global_step = 0
 
     # load style ref
     ref_style = torchvision.utils.Image.open(style_reference_path)
-    ref_style = style_transform(ref_style).unsqueeze(0).to(device)
+    all_rotated_styles = get_rotated_style_tensors(ref_style, num_rots).to(device)
 
     mse = MSELoss().to(device)
     style_extractor = VGGStyleExtractor().to(device)
     with torch.no_grad():
-        ref_style_features = style_extractor(ref_style)  # 1 x 2688 x H/4, W/4
-
+        unnormalized_ref_style_features = style_extractor(all_rotated_styles)  # num_rots x 2688 x H/4, W/4
+        ref_style_features = unnormalized_ref_style_features - torch.mean(unnormalized_ref_style_features, dim=(2, 3), keepdim=True)
+        
         # set up batched meshes and normalize
         # vert_wc_translation = torch.Tensor([0.0, -0.25, 0.0])
 
@@ -104,9 +105,18 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
 
             imgs = imgs.permute(0, 3, 1, 2)
             feats = style_extractor(render_transform(imgs))
-            print(ref_style_features.shape)
-            print(feats.shape)
-            repl = nearest_neighbor_replacement(ref_style_features, feats, tau=1e10)
+            
+            with torch.no_grad():
+                if global_step == 0:
+                    mean_content_features = torch.mean(feats, dim=(2, 3), keepdim=True)
+                    feature_count = 1
+                else:
+                    current_mean = torch.mean(feats, dim=(2, 3), keepdim=True)
+                    feature_count += 1
+                    mean_content_features = (mean_content_features * (feature_count - 1) + current_mean) / feature_count
+
+            normalized_feats = feats - mean_content_features
+            repl = nearest_neighbor_replacement(ref_style_features, normalized_feats, tau=1e10)
             loss = mse(repl, feats)
             loss.backward()
 
@@ -126,6 +136,6 @@ def transfer_style(style_reference_path, input_mesh_path, cfg: dict = {}):
 
 
 if __name__ == "__main__":
-    style_img = "data/styles/swirly.jpg"
+    style_img = "data/styles/triangles.png"
     obj = "data/spot_280k.obj"
     output_mesh = transfer_style(style_img, obj)
